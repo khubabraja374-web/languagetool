@@ -13,7 +13,6 @@ import google.generativeai as genai
 
 load_dotenv()
 
-# Configure Gemini
 api_key = os.getenv("GOOGLE_API_KEY")
 model = None
 if api_key:
@@ -41,6 +40,7 @@ class TranslateRequest(BaseModel):
 class AnalysisRequest(BaseModel):
     history: list
 
+# --- CORE LOGIC ---
 def google_translate_fallback(text, source, target):
     try:
         s = 'zh-CN' if source.startswith('zh') else source
@@ -67,13 +67,13 @@ async def translate(req: TranslateRequest):
 @app.post("/analyze-history")
 async def analyze_history(req: AnalysisRequest):
     if not model or not req.history:
-        return {"summary": "Welcome back! Start a new conversation to see AI insights."}
+        return {"summary": "Welcome back! Ready for the next deal."}
     try:
         chat_log = "\n".join([f"{m.get('speaker')}: {m.get('original')} -> {m.get('translated')}" for m in req.history])
-        prompt = f"Review this business chat history and provide a very short, professional summary in Urdu: \n\n{chat_log}"
+        prompt = f"Summarize this business deal chat in Urdu: \n\n{chat_log}"
         response = model.generate_content(prompt)
         return {"summary": response.text.strip()}
-    except: return {"summary": "Error analyzing history."}
+    except: return {"summary": "Briefing unavailable."}
 
 @app.post("/speak")
 async def text_to_speech(request: dict):
@@ -87,14 +87,27 @@ async def text_to_speech(request: dict):
             return {"audio": base64.b64encode(response.read()).decode(), "format": "mp3"}
     except: return {"audio": ""}
 
-# --- DEPLOYMENT LOGIC ---
-# Serve frontend files if they exist (Railway build)
-frontend_path = os.path.join(os.getcwd(), "frontend", "dist")
-if os.path.exists(frontend_path):
-    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="static")
+# --- RELIABLE DEPLOYMENT SERVING ---
+dist_path = os.path.join(os.getcwd(), "frontend", "dist")
 
-@app.get("/{full_path:path}")
-async def serve_react_app(full_path: str):
-    if os.path.exists(frontend_path):
-        return FileResponse(os.path.join(frontend_path, "index.html"))
-    return {"detail": "Backend is running. Frontend build not found."}
+@app.get("/health")
+def health():
+    return {"status": "ok", "frontend_ready": os.path.exists(dist_path)}
+
+if os.path.exists(dist_path):
+    # Mount the 'assets' directory first
+    assets_path = os.path.join(dist_path, "assets")
+    if os.path.exists(assets_path):
+        app.mount("/assets", StaticFiles(directory=assets_path), name="assets")
+
+    # Serve index.html for all other routes to support React Router
+    @app.get("/{rest_of_path:path}")
+    async def serve_frontend(rest_of_path: str):
+        file_path = os.path.join(dist_path, rest_of_path)
+        if os.path.isfile(file_path):
+            return FileResponse(file_path)
+        return FileResponse(os.path.join(dist_path, "index.html"))
+else:
+    @app.get("/")
+    def no_frontend():
+        return {"message": "Backend Live. Frontend folder not found in Railway build."}
