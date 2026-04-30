@@ -5,6 +5,8 @@ import urllib.parse
 import json
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 import google.generativeai as genai
@@ -66,17 +68,12 @@ async def translate(req: TranslateRequest):
 async def analyze_history(req: AnalysisRequest):
     if not model or not req.history:
         return {"summary": "Welcome back! Start a new conversation to see AI insights."}
-    
     try:
         chat_log = "\n".join([f"{m.get('speaker')}: {m.get('original')} -> {m.get('translated')}" for m in req.history])
-        prompt = (
-            f"Review this business chat history and provide a very short, professional summary in Urdu. "
-            f"Tell the user what was being discussed and give one tip on how to proceed with the deal: \n\n{chat_log}"
-        )
+        prompt = f"Review this business chat history and provide a very short, professional summary in Urdu: \n\n{chat_log}"
         response = model.generate_content(prompt)
         return {"summary": response.text.strip()}
-    except:
-        return {"summary": "Error analyzing history. But your chats are saved locally!"}
+    except: return {"summary": "Error analyzing history."}
 
 @app.post("/speak")
 async def text_to_speech(request: dict):
@@ -90,6 +87,14 @@ async def text_to_speech(request: dict):
             return {"audio": base64.b64encode(response.read()).decode(), "format": "mp3"}
     except: return {"audio": ""}
 
-@app.get("/health")
-def health():
-    return {"status": "ok", "gemini_ready": model is not None}
+# --- DEPLOYMENT LOGIC ---
+# Serve frontend files if they exist (Railway build)
+frontend_path = os.path.join(os.getcwd(), "frontend", "dist")
+if os.path.exists(frontend_path):
+    app.mount("/", StaticFiles(directory=frontend_path, html=True), name="static")
+
+@app.get("/{full_path:path}")
+async def serve_react_app(full_path: str):
+    if os.path.exists(frontend_path):
+        return FileResponse(os.path.join(frontend_path, "index.html"))
+    return {"detail": "Backend is running. Frontend build not found."}
